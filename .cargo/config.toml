@@ -1,0 +1,16 @@
+[build]
+target = "thumbv7em-none-eabi"
+
+[env]
+DEFMT_LOG = "info"
+
+[target.thumbv7em-none-eabi]
+ runner = [
+     "probe-rs",
+     "run",
+     "--chip", "STM32WLE5CC",
+     "--probe", "0483:3757",
+     "--protocol", "swd",
+     "--speed", "1000",
+     "--verify",
+ ]
