@@ -43,9 +43,27 @@ The default `debug-sleep` feature keeps SWD/RTT usable. A power-oriented build i
 cargo build --release --no-default-features
 ```
 
-The no-default-features build allows Embassy to use deeper low-power modes during
-the five-second interval. Actual sleep current remains a separate hardware
-acceptance test.
+The no-default-features build allows Embassy to use STOP1 during the five-second
+interval. A live I2C2 driver prevents STOP2 for its lifetime; changing that
+ownership model is deliberately outside this bring-up firmware. Actual sleep
+current remains a separate hardware acceptance test.
+
+RTT is configured as non-blocking, so disconnecting the debugger cannot stall
+the sensing loop. Diagnostic frames may be dropped if the host does not consume
+them quickly enough.
+
+## Source layout
+
+- `src/board.rs` owns STM32WLE5 initialization, the exact RAK3172 I2C wiring,
+  address preflight, and electrical failure diagnostics.
+- `src/bme688.rs` wraps the generic driver with this application's forced-mode,
+  oversampling, heater, and conversion-timing policy.
+- `src/diagnostics.rs` owns sensor-result formatting and post-initialization
+  error reporting; board-level electrical diagnostics remain in `board.rs`.
+- `src/main.rs` only orchestrates startup and the five-second sampling cadence.
+
+This separation keeps board details out of the measurement workflow and keeps
+the reusable cross-platform abstraction in the published `bme68x` crate.
 
 ## Verified hardware mapping
 
