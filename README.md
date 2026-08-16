@@ -37,16 +37,18 @@ cargo build --release
 cargo run --release
 ```
 
-The default `debug-sleep` feature keeps SWD/RTT usable. A power-oriented build is:
+The default build permits real STOP-mode sleep. For a development session that
+keeps SWD/RTT continuously available, opt into debugger-preserving shallow
+sleep:
 
 ```bash
-cargo build --release --no-default-features
+cargo run --release --features debug-sleep
 ```
 
-The no-default-features build allows Embassy to use STOP1 during the five-second
-interval. A live I2C2 driver prevents STOP2 for its lifetime; changing that
-ownership model is deliberately outside this bring-up firmware. Actual sleep
-current remains a separate hardware acceptance test.
+The default build currently allows Embassy to use STOP1 during the five-second
+interval. A live I2C2 driver still prevents STOP2 for its lifetime; the next
+low-power step is to release it between samples. Actual sleep current remains a
+separate hardware acceptance test.
 
 RTT is configured as non-blocking, so disconnecting the debugger cannot stall
 the sensing loop. Diagnostic frames may be dropped if the host does not consume

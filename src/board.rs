@@ -64,6 +64,8 @@ impl SensorProbe {
 pub fn init() -> Board {
     let mut config = embassy_stm32::Config::default();
 
+    // Real STOP mode is the production default. The opt-in debug feature keeps
+    // SWD/RTT available by substituting shallow sleep for STOP.
     config.enable_debug_during_sleep = cfg!(feature = "debug-sleep");
     // Only pay the STOP entry/exit overhead when the next wake-up is at least
     // this far away. It remains shorter than the five-second sample interval.

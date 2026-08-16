@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-# Keep SWD/RTT usable during ordinary development. Disable this feature for
-# real STOP-mode power measurements:
-# cargo run --release --no-default-features
-default = ["debug-sleep"]
+# Production builds permit real STOP-mode sleep by default. Opt into
+# debugger-preserving shallow sleep with:
+# cargo run --release --features debug-sleep
+default = []
 debug-sleep = ["embassy-stm32/low-power-debug-with-sleep"]
 
 [dependencies]
