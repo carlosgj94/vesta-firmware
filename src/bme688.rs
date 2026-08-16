@@ -107,7 +107,7 @@ impl Sensor {
     /// Apply the application's oversampling and heater policy.
     ///
     /// This consumes and returns `self` so an error can retain ownership of the
-    /// initialized driver instead of silently releasing the I2C peripheral.
+    /// initialized driver and bus resources instead of silently dropping them.
     pub fn configure(mut self) -> Result<Self, SetupFailure> {
         let configuration = measurement_configuration();
         if let Err(source) = self.driver.set_configuration(&configuration) {

@@ -53,8 +53,8 @@ async fn main(_spawner: Spawner) {
         }
 
         // Forced mode returns the BME688 to sleep automatically. The production
-        // build can use STOP during this wait; no radio peripheral is currently
-        // initialized by this firmware.
+        // build can use STOP2 during this wait because the concrete I2C2 driver
+        // is enabled only during individual transactions. No radio is initialized.
         sample_schedule.next().await;
     }
 }

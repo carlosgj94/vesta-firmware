@@ -2,17 +2,74 @@
 
 use bme68x::interface::I2cAddress;
 use defmt::{error, warn};
-use embassy_stm32::i2c::{self, I2c, Master};
-use embassy_stm32::mode::Blocking;
-use embassy_stm32::pac;
+use embassy_stm32::gpio::{Input, Pull};
+use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::time::Hertz;
+use embassy_stm32::{Peri, peripherals};
 use embassy_time::{Duration, Timer};
+use embedded_hal::i2c::{ErrorType, I2c as EmbeddedI2c, Operation};
 
 const SENSOR_STARTUP_DELAY: Duration = Duration::from_millis(10);
 const FAILURE_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
-/// The concrete I2C bus wired to the BME688 on this board.
-pub type SensorBus = I2c<'static, Blocking, Master>;
+/// The board resources needed to create a short-lived BME688 I2C connection.
+///
+/// Each embedded-hal transaction temporarily configures and enables I2C2, then
+/// drops it after the transaction attempt returns. Keeping only these ownership
+/// tokens between transactions lets Embassy select STOP2 during the interval.
+pub struct SensorBus {
+    peripheral: Peri<'static, peripherals::I2C2>,
+    scl: Peri<'static, peripherals::PA12>,
+    sda: Peri<'static, peripherals::PA11>,
+    config: i2c::Config,
+}
+
+impl SensorBus {
+    /// Sample the physical bus levels without enabling MCU pull-ups.
+    fn line_levels(&mut self) -> (bool, bool) {
+        let scl_high = {
+            let scl = Input::new(self.scl.reborrow(), Pull::None);
+            scl.is_high()
+        };
+        let sda_high = {
+            let sda = Input::new(self.sda.reborrow(), Pull::None);
+            sda.is_high()
+        };
+
+        (scl_high, sda_high)
+    }
+}
+
+impl ErrorType for SensorBus {
+    type Error = i2c::Error;
+}
+
+impl EmbeddedI2c for SensorBus {
+    fn transaction(
+        &mut self,
+        address: u8,
+        operations: &mut [Operation<'_>],
+    ) -> Result<(), Self::Error> {
+        let Self {
+            peripheral,
+            scl,
+            sda,
+            config,
+        } = self;
+        let mut bus = I2c::new_blocking(
+            peripheral.reborrow(),
+            scl.reborrow(),
+            sda.reborrow(),
+            *config,
+        );
+        let result = bus.blocking_transaction(address, operations);
+
+        // Dropping the concrete driver disables I2C2, releases PA12/PA11 back
+        // to analog mode, and removes I2C2's STOP2 RCC constraint.
+        drop(bus);
+        result
+    }
+}
 
 /// Initialized board resources owned by the application.
 pub struct Board {
@@ -33,7 +90,7 @@ pub struct SensorProbe {
     chip_id: u8,
 }
 
-/// Failed address probes together with ownership of the still-configured bus.
+/// Failed address probes together with ownership of the board's bus resources.
 pub struct ProbeFailure {
     bus: SensorBus,
     low_error: i2c::Error,
@@ -80,12 +137,12 @@ pub fn init() -> Board {
     i2c_config.scl_pullup = false;
     i2c_config.sda_pullup = false;
 
-    let sensor_bus = I2c::new_blocking(
-        peripherals.I2C2,
-        peripherals.PA12,
-        peripherals.PA11,
-        i2c_config,
-    );
+    let sensor_bus = SensorBus {
+        peripheral: peripherals.I2C2,
+        scl: peripherals.PA12,
+        sda: peripherals.PA11,
+        config: i2c_config,
+    };
 
     Board { sensor_bus }
 }
@@ -97,11 +154,11 @@ pub async fn probe_bme688(mut bus: SensorBus) -> Result<SensorProbe, ProbeFailur
     Timer::after(SENSOR_STARTUP_DELAY).await;
 
     let mut chip_id = [0_u8];
-    let address = match bus.blocking_write_read(0x76_u8, &[0xd0], &mut chip_id) {
+    let address = match bus.write_read(0x76_u8, &[0xd0], &mut chip_id) {
         Ok(()) => I2cAddress::Low,
         Err(low_error) => {
             let mut high_address_chip_id = [0_u8];
-            match bus.blocking_write_read(0x77_u8, &[0xd0], &mut high_address_chip_id) {
+            match bus.write_read(0x77_u8, &[0xd0], &mut high_address_chip_id) {
                 Ok(()) => {
                     chip_id = high_address_chip_id;
                     warn!("BME68x answered at diagnostic address 0x77, not wired address 0x76");
@@ -125,33 +182,20 @@ pub async fn probe_bme688(mut bus: SensorBus) -> Result<SensorProbe, ProbeFailur
     })
 }
 
-/// Report a failed probe, release the bus lines, and retain the I2C resources.
+/// Report a failed probe and retain the bus resources without further traffic.
 pub async fn halt_after_probe_failure(failure: ProbeFailure) -> ! {
-    let (bus, low_error, high_error) = failure.into_parts();
-    let gpio_inputs = pac::GPIOA.idr().read();
-    let i2c_status = pac::I2C2.isr().read();
-    error!(
-        "BME688 I2C preflight failed: error_0x76={:?}, error_0x77={:?}, SCL(PA12)={:?}, SDA(PA11)={:?}, I2C2_ISR={:?}",
-        low_error,
-        high_error,
-        gpio_inputs.idr(12),
-        gpio_inputs.idr(11),
-        i2c_status
-    );
-
-    // Release both open-drain lines after a failed transfer, then report the
-    // idle levels supplied by the board's external pull-ups.
-    pac::I2C2.cr1().modify(|control| control.set_pe(false));
+    let (mut bus, low_error, high_error) = failure.into_parts();
+    // Allow the external pull-ups and any failed target transfer to settle
+    // before temporarily enabling the GPIO input buffers for diagnosis.
     Timer::after(Duration::from_millis(1)).await;
-    let released_inputs = pac::GPIOA.idr().read();
+    let (scl_high, sda_high) = bus.line_levels();
     error!(
-        "BME688 released bus levels: SCL(PA12)={:?}, SDA(PA11)={:?}",
-        released_inputs.idr(12),
-        released_inputs.idr(11)
+        "BME688 I2C preflight failed: error_0x76={:?}, error_0x77={:?}, SCL(PA12)_high={}, SDA(PA11)_high={}",
+        low_error, high_error, scl_high, sda_high
     );
 
-    // Retain ownership of the I2C driver and pins. I2C2 remains disabled, so
-    // this state is safe for electrical probing and emits no more bus traffic.
+    // Retain the peripheral and pin tokens. No concrete I2C driver exists, so
+    // I2C2 stays disabled and no more traffic can be emitted.
     loop {
         let _keep_bus_and_pins_alive = &bus;
         Timer::after(FAILURE_REPORT_INTERVAL).await;

@@ -27,8 +27,8 @@ gas resistance. Gas resistance then rose normally across subsequent heater
 cycles while all samples remained gas-valid and heater-stable.
 
 The firmware performs a chip-ID preflight before initializing the reusable
-driver. On failure it disables I2C2, reports the live line/status state, and
-generates no further bus traffic.
+driver. On failure it reports both address errors and the physical SCL/SDA
+levels, then generates no further bus traffic.
 
 ## Build and run
 
@@ -45,10 +45,12 @@ sleep:
 cargo run --release --features debug-sleep
 ```
 
-The default build currently allows Embassy to use STOP1 during the one-minute
-interval. A live I2C2 driver still prevents STOP2 for its lifetime; the next
-low-power step is to release it between samples. Actual sleep current remains a
-separate hardware acceptance test.
+The reusable sensor driver retains its calibration and configuration, but its
+board bus creates the concrete I2C2 driver only for the duration of one
+transaction attempt. Dropping that temporary driver disables I2C2 and releases
+its pins, so the default build is eligible for STOP2 during the one-minute
+interval. Actual STOP2 entry and sleep current remain a separate hardware
+acceptance test.
 
 The one-minute interval is an explicit bring-up placeholder in `src/main.rs`.
 The periodic ticker anchors wake-ups to fixed deadlines, so measurement and
@@ -61,7 +63,8 @@ them quickly enough.
 ## Source layout
 
 - `src/board.rs` owns STM32WLE5 initialization, the exact RAK3172 I2C wiring,
-  address preflight, and electrical failure diagnostics.
+  transaction-scoped I2C ownership, address preflight, and electrical failure
+  diagnostics.
 - `src/bme688.rs` wraps the generic driver with this application's forced-mode,
   oversampling, heater, and conversion-timing policy.
 - `src/output.rs` is the replaceable measurement-output boundary; it writes RTT

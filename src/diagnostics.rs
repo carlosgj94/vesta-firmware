@@ -81,8 +81,8 @@ pub async fn halt_after_setup_failure(setup_failure: SetupFailure, report_interv
     log_sensor_error(&sensor_error);
 
     loop {
-        // Keep the initialized sensor, I2C peripheral, and pins alive so the
-        // fatal state does not silently alter the electrical configuration.
+        // Retain the initialized sensor state and ownership of its board
+        // resources. No concrete I2C driver exists between report intervals.
         let _keep_sensor_alive = &sensor;
         Timer::after(report_interval).await;
         error!("BME688 unavailable; reset the board after checking power and I2C wiring");
