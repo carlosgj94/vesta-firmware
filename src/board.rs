@@ -68,7 +68,7 @@ pub fn init() -> Board {
     // SWD/RTT available by substituting shallow sleep for STOP.
     config.enable_debug_during_sleep = cfg!(feature = "debug-sleep");
     // Only pay the STOP entry/exit overhead when the next wake-up is at least
-    // this far away. It remains shorter than the five-second sample interval.
+    // this far away. It remains far shorter than the sampling interval.
     config.min_stop_pause = Duration::from_millis(250);
 
     let peripherals = embassy_stm32::init(config);

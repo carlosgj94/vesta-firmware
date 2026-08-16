@@ -45,10 +45,14 @@ sleep:
 cargo run --release --features debug-sleep
 ```
 
-The default build currently allows Embassy to use STOP1 during the five-second
+The default build currently allows Embassy to use STOP1 during the one-minute
 interval. A live I2C2 driver still prevents STOP2 for its lifetime; the next
 low-power step is to release it between samples. Actual sleep current remains a
 separate hardware acceptance test.
+
+The one-minute interval is an explicit bring-up placeholder in `src/main.rs`.
+The periodic ticker anchors wake-ups to fixed deadlines, so measurement and
+future radio-transmission time do not accumulate into the sampling cadence.
 
 RTT is configured as non-blocking, so disconnecting the debugger cannot stall
 the sensing loop. Diagnostic frames may be dropped if the host does not consume
@@ -64,7 +68,7 @@ them quickly enough.
   today and will later own LoRa transmission.
 - `src/diagnostics.rs` owns startup and error reporting; board-level electrical
   diagnostics remain in `board.rs`.
-- `src/main.rs` only orchestrates startup and the five-second sampling cadence.
+- `src/main.rs` only orchestrates startup and the periodic sampling cadence.
 
 This separation keeps board details out of the measurement workflow and keeps
 the reusable cross-platform abstraction in the published `bme68x` crate.
