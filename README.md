@@ -60,8 +60,10 @@ them quickly enough.
   address preflight, and electrical failure diagnostics.
 - `src/bme688.rs` wraps the generic driver with this application's forced-mode,
   oversampling, heater, and conversion-timing policy.
-- `src/diagnostics.rs` owns sensor-result formatting and post-initialization
-  error reporting; board-level electrical diagnostics remain in `board.rs`.
+- `src/output.rs` is the replaceable measurement-output boundary; it writes RTT
+  today and will later own LoRa transmission.
+- `src/diagnostics.rs` owns startup and error reporting; board-level electrical
+  diagnostics remain in `board.rs`.
 - `src/main.rs` only orchestrates startup and the five-second sampling cadence.
 
 This separation keeps board details out of the measurement workflow and keeps

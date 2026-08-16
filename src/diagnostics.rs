@@ -1,7 +1,7 @@
 //! Human-readable RTT diagnostics kept separate from measurement logic.
 
-use bme68x::{Error as Bme68xError, Measurements};
-use defmt::{error, info, warn};
+use bme68x::Error as Bme68xError;
+use defmt::{error, info};
 use embassy_time::{Duration, Timer};
 
 use crate::bme688::{
@@ -31,28 +31,6 @@ pub fn log_ready(sensor: &Sensor) {
         HEATER_DURATION_MS,
         sensor.conversion_wait().as_micros()
     );
-}
-
-pub fn log_measurements(measurements: &Measurements) {
-    if measurements.is_empty() {
-        warn!("BME688 conversion completed but no new data field was available");
-        return;
-    }
-
-    for measurement in measurements {
-        let values = measurement.values;
-        info!(
-            "BME688: temperature_centi_c={}, pressure_pa={}, humidity_milli_percent={}, gas_ohms={}, status=0x{:02x}, new={}, gas_valid={}, heater_stable={}",
-            values.temperature,
-            values.pressure,
-            values.humidity,
-            values.gas_resistance,
-            measurement.status.bits(),
-            measurement.status.is_new(),
-            measurement.status.gas_valid(),
-            measurement.status.heater_stable()
-        );
-    }
 }
 
 pub fn log_sensor_error(sensor_error: &SensorError) {

@@ -4,6 +4,7 @@
 mod bme688;
 mod board;
 mod diagnostics;
+mod output;
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -39,7 +40,7 @@ async fn main(_spawner: Spawner) {
 
     loop {
         match sensor.sample().await {
-            Ok(measurements) => diagnostics::log_measurements(&measurements),
+            Ok(measurements) => output::emit(&measurements),
             Err(sensor_error) => diagnostics::log_sensor_error(&sensor_error),
         }
 
