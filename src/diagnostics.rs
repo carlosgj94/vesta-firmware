@@ -3,6 +3,7 @@
 use bme68x::Error as Bme68xError;
 use defmt::{error, info};
 use embassy_time::{Duration, Timer};
+use lora_phy::mod_params::RadioError;
 
 use crate::bme688::{
     HEATER_DURATION_MS, HEATER_TEMPERATURE_CELSIUS, Sensor, SensorError, SetupFailure,
@@ -65,6 +66,10 @@ pub fn log_sensor_error(sensor_error: &SensorError) {
             error!("BME688 {} failed: sensor timeout", operation);
         }
     }
+}
+
+pub fn log_radio_error(radio_error: &RadioError) {
+    error!("LoRa P2P transmission failed: {}", radio_error);
 }
 
 pub async fn halt_after_sensor_error(sensor_error: &SensorError, report_interval: Duration) -> ! {

@@ -28,12 +28,16 @@ embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "3e99135a
     "memory-x",
     "time-driver-tim2",
     "executor-thread",
+    "unstable-pac",
 ] }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "3e99135a9e1bdfae06f5c9e88e9af96c8886d2eb", features = ["defmt"] }
 embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "3e99135a9e1bdfae06f5c9e88e9af96c8886d2eb", features = [
     "defmt",
     "defmt-timestamp-uptime",
 ] }
 embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+lora-phy = "=3.0.1"
 
 bme68x = { version = "0.1.0", default-features = false, features = [
     "blocking",

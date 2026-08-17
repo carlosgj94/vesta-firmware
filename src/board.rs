@@ -74,13 +74,24 @@ impl EmbeddedI2c for SensorBus {
 /// Initialized board resources owned by the application.
 pub struct Board {
     sensor_bus: SensorBus,
+    radio: RadioResources,
 }
 
 impl Board {
-    /// Transfer ownership of the BME688 bus to the sensor workflow.
-    pub fn into_sensor_bus(self) -> SensorBus {
-        self.sensor_bus
+    /// Split the independent sensor and radio resources between their owners.
+    pub fn into_parts(self) -> (SensorBus, RadioResources) {
+        (self.sensor_bus, self.radio)
     }
+}
+
+/// Tokens retained between transmissions so concrete radio drivers can be
+/// created only while a packet is being sent.
+pub struct RadioResources {
+    pub(crate) peripheral: Peri<'static, peripherals::SUBGHZSPI>,
+    pub(crate) tx_dma: Peri<'static, peripherals::DMA1_CH1>,
+    pub(crate) rx_dma: Peri<'static, peripherals::DMA1_CH2>,
+    pub(crate) rf_switch_rx: Peri<'static, peripherals::PB8>,
+    pub(crate) rf_switch_tx: Peri<'static, peripherals::PC13>,
 }
 
 /// A responsive BME68x and the bus on which it was found.
@@ -121,6 +132,12 @@ impl SensorProbe {
 pub fn init() -> Board {
     let mut config = embassy_stm32::Config::default();
 
+    // Run from the internal MSI at the STM32WLE5's supported 48 MHz ceiling.
+    // This avoids depending on the radio TCXO for the MCU system clock and lets
+    // the wake/measure/transmit work complete quickly before returning to STOP2.
+    config.rcc.msi = Some(embassy_stm32::rcc::MSIRange::Range48m);
+    config.rcc.sys = embassy_stm32::rcc::Sysclk::Msi;
+
     // Real STOP mode is the production default. The opt-in debug feature keeps
     // SWD/RTT available by substituting shallow sleep for STOP.
     config.enable_debug_during_sleep = cfg!(feature = "debug-sleep");
@@ -144,7 +161,16 @@ pub fn init() -> Board {
         config: i2c_config,
     };
 
-    Board { sensor_bus }
+    let radio = RadioResources {
+        peripheral: peripherals.SUBGHZSPI,
+        tx_dma: peripherals.DMA1_CH1,
+        rx_dma: peripherals.DMA1_CH2,
+        // RAK3172-T internal RF switch: PB8=RX enable, PC13=TX enable.
+        rf_switch_rx: peripherals.PB8,
+        rf_switch_tx: peripherals.PC13,
+    };
+
+    Board { sensor_bus, radio }
 }
 
 /// Find the BME688 while preserving the bus on failure for diagnostics/recovery.

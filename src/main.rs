@@ -5,6 +5,8 @@ mod bme688;
 mod board;
 mod diagnostics;
 mod output;
+mod payload;
+mod radio;
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Ticker};
@@ -22,7 +24,8 @@ const FAILURE_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 )]
 async fn main(_spawner: Spawner) {
     let board = board::init();
-    let probe = match board::probe_bme688(board.into_sensor_bus()).await {
+    let (sensor_bus, radio_resources) = board.into_parts();
+    let probe = match board::probe_bme688(sensor_bus).await {
         Ok(probe) => probe,
         Err(probe_failure) => board::halt_after_probe_failure(probe_failure).await,
     };
@@ -41,6 +44,7 @@ async fn main(_spawner: Spawner) {
         }
     };
     diagnostics::log_ready(&sensor);
+    let mut output = output::RadioOutput::new(radio_resources);
 
     // Ticker anchors each wake-up to a fixed deadline. Measurement and future
     // radio-transmission time therefore do not accumulate into schedule drift.
@@ -48,13 +52,17 @@ async fn main(_spawner: Spawner) {
 
     loop {
         match sensor.sample().await {
-            Ok(measurements) => output::emit(&measurements),
+            Ok(measurements) => {
+                if let Err(radio_error) = output.emit(&measurements).await {
+                    diagnostics::log_radio_error(&radio_error);
+                }
+            }
             Err(sensor_error) => diagnostics::log_sensor_error(&sensor_error),
         }
 
         // Forced mode returns the BME688 to sleep automatically. The production
-        // build can use STOP2 during this wait because the concrete I2C2 driver
-        // is enabled only during individual transactions. No radio is initialized.
+        // build can use STOP2 during this wait because the concrete I2C2 and
+        // SUBGHZSPI drivers exist only during individual transactions.
         sample_schedule.next().await;
     }
 }
