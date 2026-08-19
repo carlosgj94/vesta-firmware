@@ -1,13 +1,21 @@
 [package]
 name = "vesta-embedded"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [features]
+# The deployed protocol-v1 image remains the default. Profile v2 must always be
+# selected explicitly so an old receiver is never surprised by a new wire
+# format.
+default = ["telemetry-v1"]
+telemetry-v1 = ["dep:bme68x-v1"]
+profile-v2 = ["dep:bme68x-v2", "dep:vesta-protocol-v2"]
+# Binary COBS records on USART2/PA2 for rapid laboratory capture. This replaces
+# LoRa as the profile-v2 transport; it does not transmit both copies.
+profile-v2-uart = ["profile-v2"]
+
 # Production builds permit real STOP-mode sleep by default. Opt into
-# debugger-preserving shallow sleep with:
-# cargo run --release --features debug-sleep
-default = []
+# debugger-preserving shallow sleep only while attached to a debugger.
 debug-sleep = ["embassy-stm32/low-power-debug-with-sleep"]
 
 [dependencies]
@@ -39,10 +47,23 @@ embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
 lora-phy = "=3.0.1"
 
-bme68x = { version = "0.1.0", default-features = false, features = [
+# Preserve the deployed v1 implementation against the exact published driver.
+bme68x-v1 = { package = "bme68x", version = "=0.1.0", optional = true, default-features = false, features = [
     "blocking",
     "defmt",
 ] }
+
+# Profile collection is pinned to the exact reviewed 0.2 driver revision.
+bme68x-v2 = { package = "bme68x", git = "https://github.com/carlosgj94/bosch-bme68x-rust.git", rev = "64ee71d375958927aee2ae3d3405a090bb16ea08", optional = true, default-features = false, features = [
+    "blocking",
+    "defmt",
+] }
+
+[dependencies.vesta-protocol-v2]
+package = "vesta-protocol"
+git = "https://github.com/carlosgj94/vesta-receiver.git"
+rev = "82d12623ec2e58dc0048c0174018afb20ae7686c"
+optional = true
 
 [profile.release]
 debug = 2

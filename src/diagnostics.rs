@@ -8,7 +8,7 @@ use lora_phy::mod_params::RadioError;
 use crate::bme688::{
     HEATER_DURATION_MS, HEATER_TEMPERATURE_CELSIUS, Sensor, SensorError, SetupFailure,
 };
-use crate::board::SensorProbe;
+use crate::board::{RadioResources, SensorProbe};
 
 pub fn log_probe(probe: &SensorProbe) {
     info!(
@@ -72,16 +72,25 @@ pub fn log_radio_error(radio_error: &RadioError) {
     error!("LoRa P2P transmission failed: {}", radio_error);
 }
 
-pub async fn halt_after_sensor_error(sensor_error: &SensorError, report_interval: Duration) -> ! {
+pub async fn halt_after_sensor_error(
+    sensor_error: &SensorError,
+    radio: RadioResources,
+    report_interval: Duration,
+) -> ! {
     log_sensor_error(sensor_error);
 
     loop {
+        let _keep_rf_switch_outputs_low = &radio;
         Timer::after(report_interval).await;
         error!("BME688 unavailable; reset the board after checking power and I2C wiring");
     }
 }
 
-pub async fn halt_after_setup_failure(setup_failure: SetupFailure, report_interval: Duration) -> ! {
+pub async fn halt_after_setup_failure(
+    setup_failure: SetupFailure,
+    radio: RadioResources,
+    report_interval: Duration,
+) -> ! {
     let (sensor, sensor_error) = setup_failure.into_parts();
     log_sensor_error(&sensor_error);
 
@@ -89,6 +98,7 @@ pub async fn halt_after_setup_failure(setup_failure: SetupFailure, report_interv
         // Retain the initialized sensor state and ownership of its board
         // resources. No concrete I2C driver exists between report intervals.
         let _keep_sensor_alive = &sensor;
+        let _keep_rf_switch_outputs_low = &radio;
         Timer::after(report_interval).await;
         error!("BME688 unavailable; reset the board after checking power and I2C wiring");
     }

@@ -1,0 +1,13 @@
+[package]
+name = "vesta-degraded-health-host-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+embedded-hal = "1.0.0"
+
+[dependencies.vesta-protocol-v2]
+package = "vesta-protocol"
+git = "https://github.com/carlosgj94/vesta-receiver.git"
+rev = "82d12623ec2e58dc0048c0174018afb20ae7686c"

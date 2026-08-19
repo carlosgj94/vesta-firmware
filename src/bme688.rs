@@ -108,6 +108,7 @@ impl Sensor {
     ///
     /// This consumes and returns `self` so an error can retain ownership of the
     /// initialized driver and bus resources instead of silently dropping them.
+    #[allow(clippy::result_large_err)]
     pub fn configure(mut self) -> Result<Self, SetupFailure> {
         let configuration = measurement_configuration();
         if let Err(source) = self.driver.set_configuration(&configuration) {

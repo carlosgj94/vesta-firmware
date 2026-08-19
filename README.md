@@ -4,7 +4,8 @@ Rust/Embassy firmware for the fabricated Vesta board. Its
 `RAK3172-T-8-SM-I` module contains an STM32WLE5CC, a 3.0 V TCXO, an EU868
 radio front end, and an IPEX antenna connector.
 
-Every cycle the firmware:
+The default `telemetry-v1` build preserves the proven one-minute forced-mode
+loop. Every cycle it:
 
 1. wakes and triggers one forced BME688 conversion;
 2. reads compensated values, raw ADC channels, and field/heater metadata;
@@ -17,22 +18,35 @@ The sensor driver is the published
 [`bme68x` 0.1.0 crate](https://crates.io/crates/bme68x). The radio physical
 layer uses [`lora-phy` 3.0.1](https://crates.io/crates/lora-phy).
 
-## Validation status (2026-08-17)
+The opt-in ten-step profile-v2 acquisition, protocol, training UART, health
+telemetry, and receiver rollout boundary are documented in
+[`PROFILE_V2.md`](PROFILE_V2.md).
+
+## Validation status (2026-08-19)
 
 - ST-LINK/SWD, flash programming, RTT, and Cortex-M4 execution work.
 - The BME688 has been read successfully from this assembled board at address
   `0x76`; repeated gas-valid and heater-stable measurements were captured.
-- The LoRa firmware passes locked production and `debug-sleep` release builds,
-  strict Clippy, and exact host-side wire-format tests.
-- The transmitter image has **not** yet been flashed or allowed to transmit.
-- No packet has yet been received by the Raspberry Pi HAT.
+- Protocol-v1 LoRa transmission was flashed and received end to end by the
+  Raspberry Pi SX1262 HAT with valid PHY CRC and successful Rust decoding.
+- The firmware passes locked release builds, strict Clippy, and exact host-side
+  wire-format tests for default v1, profile-v2 LoRa, and profile-v2 UART.
+- Profile-v2 has **not** been flashed, transmitted, or received yet; its
+  matching receiver must be deployed before that hardware test.
 - Source ownership makes the production idle structurally eligible for STOP2,
   but actual STOP2 entry and current still require a hardware power trace.
 
 ## Build and run
 
 ```bash
+# Preserved/default protocol v1
 cargo build --release --locked
+
+# Profile v2 over LoRa
+cargo build --release --locked --no-default-features --features profile-v2
+
+# Profile v2 training stream over USART2/PA2
+cargo build --release --locked --no-default-features --features profile-v2-uart,debug-sleep
 ```
 
 Running the image starts transmitting immediately after the first sensor
@@ -73,10 +87,16 @@ The first bring-up uses raw LoRa P2P rather than LoRaWAN:
 RAK3172-T configuration is board-specific: the firmware selects the STM32WL
 high-power PA, enables DCDC, supplies the TCXO through radio DIO3 at 3.0 V, and
 uses PB8 for RX switching and PC13 for TX switching. Both switch controls are
-forced low on every exit path. Busy and TX-completion waits are bounded so a
-radio fault cannot keep the MCU awake indefinitely. Session teardown also holds
+initialized once as persistent push-pull outputs and remain low through idle,
+including in the UART-only training build; session wrappers restore low on
+every radio exit path instead of dropping the pins to analog/high-impedance
+mode. Holding GPIO outputs adds no RCC STOP constraint.
+Busy and TX-completion waits are bounded so a radio fault cannot keep the MCU
+awake indefinitely. Session teardown also holds
 the SubGHz core in reset, matching ST's deinitialization fallback and ensuring
 an initialization or sleep error cannot leave the radio or TCXO awake.
+RAK3172-T's PB0/VDDTCXO path is controlled by the STM32WL radio's DIO3 command,
+not an ordinary MCU GPIO, so it is deliberately not retained as a GPIO output.
 
 Raw P2P is suitable for bring-up, but it provides neither encryption nor
 authentication. Production wildfire alerts will need LoRaWAN or an
@@ -116,14 +136,14 @@ order before the Raspberry Pi decoder is introduced.
 
 The first sample happens immediately at boot. Later sample starts are anchored
 to fixed one-minute deadlines, so sensor and radio work do not accumulate into
-schedule drift. The interval remains a bring-up placeholder in `src/main.rs`.
+schedule drift. The preserved bring-up interval remains defined in `src/main.rs`.
 
 The reusable BME688 driver retains calibration and configuration, while its
 board bus constructs the concrete I2C2 driver only for a transaction attempt.
-Likewise, the radio owns only peripheral tokens while idle and constructs the
-concrete SUBGHZSPI/DMA/GPIO drivers for one measurement batch. After cold radio
-sleep, dropping those drivers removes their RCC constraints before the long
-timer wait.
+Likewise, the radio constructs concrete SUBGHZSPI/DMA drivers for one
+measurement batch. After cold radio sleep, dropping those drivers removes their
+RCC constraints before the long timer wait; persistent PB8/PC13 GPIO outputs
+continue driving the RF switch at low/low without blocking STOP2.
 
 The timer currently uses the STM32's internal LSI, so a nominal minute can
 drift with oscillator tolerance and temperature. Deployment timing and sleep

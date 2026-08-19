@@ -88,6 +88,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bme68x"
+version = "0.2.0"
+source = "git+https://github.com/carlosgj94/bosch-bme68x-rust.git?rev=64ee71d375958927aee2ae3d3405a090bb16ea08#64ee71d375958927aee2ae3d3405a090bb16ea08"
+dependencies = [
+ "defmt 1.1.1",
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1085,9 +1094,10 @@ checksum = "77439c1b53d2303b20d9459b1ade71a83c716e3f9c34f3228c00e6f185d6c002"
 
 [[package]]
 name = "vesta-embedded"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "bme68x",
+ "bme68x 0.1.0",
+ "bme68x 0.2.0",
  "cortex-m",
  "cortex-m-rt",
  "defmt 1.1.1",
@@ -1100,7 +1110,13 @@ dependencies = [
  "embedded-hal-async",
  "lora-phy",
  "panic-probe",
+ "vesta-protocol",
 ]
+
+[[package]]
+name = "vesta-protocol"
+version = "0.1.0"
+source = "git+https://github.com/carlosgj94/vesta-receiver.git?rev=82d12623ec2e58dc0048c0174018afb20ae7686c#82d12623ec2e58dc0048c0174018afb20ae7686c"
 
 [[package]]
 name = "void"
