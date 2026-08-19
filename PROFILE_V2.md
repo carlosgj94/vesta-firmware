@@ -142,25 +142,33 @@ from the trigger anchor, not an exact gas-conversion timestamp. The exact
 configured heater timing remains in `DeviceConfig` through the repetition
 multiplier, shared wait, TPHG, and effective step duration.
 
-All set bits in `heater_readback_valid_bitmap` mean that the raw
-IDAC/RES_HEAT/GAS_WAIT bytes were successfully read into that step descriptor.
-Exact configuration validation compares RES_HEAT, GAS_WAIT, shared/control,
-operation-mode, and environmental registers. IDAC is preserved as raw metadata,
-not compared with a programmed expectation, because this driver does not
-program IDAC.
+All set bits in `heater_readback_valid_bitmap` mean that the descriptor's raw
+IDAC/RES_HEAT/GAS_WAIT bytes came from successful sensor readbacks. Exact
+configuration validation compares RES_HEAT, GAS_WAIT, shared/control,
+operation-mode, and environmental registers. This firmware does not program
+IDAC, and live IDAC readback naturally drifts even when the programmed profile
+is unchanged.
 
-Before encoding each verified scan, the in-memory `DeviceConfig` is rebuilt
-from that scan's immutable pre-trigger readback snapshot. If any raw metadata
-changes, the firmware recomputes
+When telemetry is first established, firmware captures one canonical IDAC
+readback array for `DeviceConfig` identity. Before hashing every later verified
+configuration candidate, only its volatile IDAC descriptor bytes are restored
+from that boot-lifetime snapshot. They are not refreshed from per-scan
+observations. The current raw IDAC byte is still transmitted independently in
+every `ProfileStep.raw_heater_current` field.
+
+Every other verified candidate field remains live: RES_HEAT, GAS_WAIT,
+shared/control, environmental settings, timing, calibration, firmware/profile,
+cadence, and radio metadata. A change in any of those fields recomputes a new
 `config_id` and forces the new `DeviceConfig` into that scan's output batch
 instead of waiting for the normal six-scan repetition boundary. Initial,
-periodic, and changed definitions remain delivery-pending through codec errors,
-configuration-mismatch scans, and output failure; the pending state clears
-only after the config-first record is confirmed complete, so a failed cadence
-packet is retried on the next verified scan rather than delayed six scans. The
-`CONFIG_REPEAT` marker is tracked per exact `config_id`: startup and the first
-successfully completed definition after any mid-boot ID change are marked new,
-while only later records of that already delivered ID are marked repeats.
+periodic, and genuinely changed definitions remain delivery-pending through
+codec errors, configuration-mismatch scans, and output failure; the pending
+state clears only after the config-first record is confirmed complete, so a
+failed cadence packet is retried on the next verified scan rather than delayed
+six scans. The `CONFIG_REPEAT` marker is tracked per exact `config_id`: startup
+and the first successfully completed definition after any real mid-boot ID
+change are marked new, while only later records of that already delivered ID
+are marked repeats.
 
 ## Identity, health, and power ownership
 

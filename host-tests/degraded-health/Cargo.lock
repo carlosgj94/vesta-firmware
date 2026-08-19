@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "bme68x"
+version = "0.2.0"
+source = "git+https://github.com/carlosgj94/bosch-bme68x-rust.git?rev=64ee71d375958927aee2ae3d3405a090bb16ea08#64ee71d375958927aee2ae3d3405a090bb16ea08"
+dependencies = [
+ "embedded-hal",
+]
+
+[[package]]
 name = "embedded-hal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12,6 +20,7 @@ checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
 name = "vesta-degraded-health-host-tests"
 version = "0.1.0"
 dependencies = [
+ "bme68x",
  "embedded-hal",
  "vesta-protocol",
 ]

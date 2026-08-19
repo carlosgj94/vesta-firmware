@@ -16,9 +16,8 @@ use vesta_protocol_v2::v2::{
     HEALTH_FLAG_BOOT_ID_UNAVAILABLE, HEALTH_FLAG_CONFIG_MISMATCH, HEALTH_FLAG_COUNTERS_SATURATED,
     HEALTH_FLAG_LAST_SCAN_INCOMPLETE, HEALTH_FLAG_RADIO_ERROR_SEEN, HEALTH_FLAG_SENSOR_ERROR_SEEN,
     HeaterStepConfig, MAX_PROFILE_STEPS, MAX_V2_FRAME_LEN_U8, OUTPUT_ROUTE_LORA_P2P,
-    OUTPUT_ROUTE_UART_COBS_CRC32, ProfileScan as WireProfileScan, ProfileStep as WireProfileStep,
-    STEPS_PER_FRAGMENT_U8, device_config_id, encode_device_config, encode_device_health,
-    encode_profile,
+    OUTPUT_ROUTE_UART_COBS_CRC32, ProfileScan as WireProfileScan, STEPS_PER_FRAGMENT_U8,
+    encode_device_config, encode_device_health, encode_profile,
 };
 
 use crate::bme688_profile::{MAX_POLL_COUNT, ProfileScan};
@@ -34,8 +33,9 @@ use crate::profile_definition::{
     TimeoutBound,
 };
 use crate::profile_status::{
-    DeviceConfigDeliveryState, configuration_check_due, configuration_collection_flags,
-    discarded_field_count_overflowed, total_discarded_field_count, wire_config_id,
+    CanonicalIdacSnapshot, DeviceConfigDeliveryState, configuration_check_due,
+    configuration_collection_flags, discarded_field_count_overflowed, total_discarded_field_count,
+    wire_config_id, wire_profile_step,
 };
 use crate::{bme688_profile, profile_policy, radio_config};
 
@@ -60,6 +60,7 @@ pub struct Telemetry {
     reset_cause: ResetCause,
     config: DeviceConfig,
     config_id: u64,
+    canonical_idac: CanonicalIdacSnapshot,
     next_scan_sequence: u32,
     config_delivery: DeviceConfigDeliveryState,
 }
@@ -70,30 +71,37 @@ impl Telemetry {
         reset_cause: ResetCause,
         metadata: &bme688_profile::SensorMetadata,
     ) -> Result<Self, CodecError> {
-        let config = device_config(metadata);
-        let config_id = device_config_id(&config)?;
+        let canonical_idac =
+            CanonicalIdacSnapshot::capture(metadata.readback.heater.registers.current);
+        let mut config = device_config(metadata);
+        let config_id = canonical_idac.config_id(&mut config)?;
         Ok(Self {
             identity,
             reset_cause,
             config,
             config_id,
+            canonical_idac,
             next_scan_sequence: 0,
             config_delivery: DeviceConfigDeliveryState::new(),
         })
     }
 
-    /// Refresh raw readback metadata after mandatory per-scan validation. A
-    /// changed ID forces its definition into the same output batch.
+    /// Refresh verified configuration metadata after mandatory per-scan
+    /// validation. Volatile, unprogrammed IDAC bytes are restored from the
+    /// canonical startup snapshot before hashing; a genuine remaining change
+    /// forces its definition into the same output batch.
     pub fn refresh_configuration(
         &mut self,
         metadata: &bme688_profile::SensorMetadata,
     ) -> Result<(), CodecError> {
-        let config = device_config(metadata);
-        let config_id = device_config_id(&config)?;
-        if config_id != self.config_id {
+        let mut config = device_config(metadata);
+        let config_id = self.canonical_idac.config_id(&mut config)?;
+        if self
+            .config_delivery
+            .record_id_change_if_needed(self.config_id, config_id)
+        {
             self.config = config;
             self.config_id = config_id;
-            self.config_delivery.record_id_change();
         }
         Ok(())
     }
@@ -304,31 +312,11 @@ fn wire_profile_scan(scan: &ProfileScan, config: &DeviceConfig) -> WireProfileSc
         .enumerate()
     {
         if let Some(step) = collector.step(u8::try_from(index).unwrap_or(u8::MAX)) {
-            let measurement = step.measurement;
-            *output = Some(WireProfileStep {
-                step_index: u8::try_from(index).unwrap_or(u8::MAX),
-                gas_index: measurement.gas_index,
-                measurement_index: measurement.measurement_index,
-                status: measurement.status.bits(),
-                raw_measurement_status: measurement.raw_field_status,
-                raw_gas_status: measurement.raw_gas_status,
-                target_temperature_celsius: config.steps[index].target_temperature_celsius,
-                configured_duration_us: config.steps[index].configured_duration_us,
-                offset_us: step.observed_offset_us,
-                temperature_centi_celsius: measurement.values.temperature,
-                pressure_pascal: measurement.values.pressure,
-                humidity_milli_percent_rh: measurement.values.humidity,
-                gas_resistance_ohm: measurement.values.gas_resistance,
-                temperature_adc: measurement.raw.temperature_adc,
-                pressure_adc: measurement.raw.pressure_adc,
-                humidity_adc: measurement.raw.humidity_adc,
-                gas_resistance_adc: measurement.raw.gas_resistance_adc,
-                gas_range: measurement.raw.gas_range,
-                repetition_multiplier: config.steps[index].repetition_multiplier,
-                heater_resistance: measurement.heater_resistance,
-                heater_current: measurement.heater_current,
-                gas_wait: measurement.gas_wait,
-            });
+            *output = Some(wire_profile_step(
+                u8::try_from(index).unwrap_or(u8::MAX),
+                *step,
+                config.steps[index],
+            ));
         }
     }
 

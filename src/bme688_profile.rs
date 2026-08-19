@@ -112,6 +112,20 @@ pub struct SensorMetadata {
     pub exact_configuration_verified: bool,
 }
 
+impl SensorMetadata {
+    /// Compare the stable sensor/configuration identity while ignoring only
+    /// unprogrammed volatile IDAC readback bytes.
+    #[must_use]
+    pub fn same_configuration_identity(&self, other: &Self) -> bool {
+        self.chip_id == other.chip_id
+            && self.variant == other.variant
+            && self.address == other.address
+            && self.calibration_fingerprint == other.calibration_fingerprint
+            && self.exact_configuration_verified == other.exact_configuration_verified
+            && crate::profile_status::sensor_readback_identity_eq(&self.readback, &other.readback)
+    }
+}
+
 /// A complete or explicitly partial scan. Runtime sensor failures do not erase
 /// measurements collected before the failure.
 pub struct ProfileScan {
@@ -196,7 +210,7 @@ impl ProfileScan {
             self.post_scan_configuration_verified,
             self.post_scan_metadata
                 .zip(self.pre_trigger_metadata)
-                .is_some_and(|(post, pre)| post == pre),
+                .is_some_and(|(post, pre)| post.same_configuration_identity(&pre)),
         )
     }
 }

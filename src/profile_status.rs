@@ -1,10 +1,109 @@
 //! Target-independent profile outcome and configuration-check policy.
 
-use vesta_protocol_v2::v2::{COLLECTION_FLAG_CONFIG_MISMATCH, COLLECTION_FLAG_SENSOR_RECONFIGURED};
+use vesta_protocol_v2::v2::{
+    COLLECTION_FLAG_CONFIG_MISMATCH, COLLECTION_FLAG_SENSOR_RECONFIGURED, DeviceConfig,
+    Error as CodecError, HeaterStepConfig, MAX_PROFILE_STEPS, ProfileStep as WireProfileStep,
+    device_config_id,
+};
+
+/// Stable IDAC metadata used only by `DeviceConfig` identity.
+///
+/// The BME688 IDAC registers are read-only in this firmware and can drift even
+/// though every programmed heater/configuration register is unchanged. Capture
+/// them once when telemetry is established, then reuse those exact bytes when
+/// refreshing the configuration record. Per-scan measurements retain their
+/// current live IDAC observation independently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalIdacSnapshot {
+    values: [u8; MAX_PROFILE_STEPS],
+}
+
+impl CanonicalIdacSnapshot {
+    #[must_use]
+    pub const fn capture(values: [u8; MAX_PROFILE_STEPS]) -> Self {
+        Self { values }
+    }
+
+    /// Replace only active-step configuration IDAC metadata with the snapshot.
+    pub fn apply_to(self, config: &mut DeviceConfig) {
+        for (step, canonical) in config
+            .steps
+            .iter_mut()
+            .zip(self.values)
+            .take(usize::from(config.expected_step_count))
+        {
+            step.readback_heater_current = canonical;
+        }
+    }
+
+    /// Canonicalize volatile IDAC metadata before calculating configuration ID.
+    pub fn config_id(self, config: &mut DeviceConfig) -> Result<u64, CodecError> {
+        self.apply_to(config);
+        device_config_id(config)
+    }
+}
+
+/// Translate one retained sensor field into its exact profile-wire record.
+///
+/// The heater current comes directly from this scan's measurement. It is
+/// deliberately independent from the canonical IDAC bytes used by
+/// `DeviceConfig` identity.
+#[must_use]
+pub const fn wire_profile_step(
+    step_index: u8,
+    step: bme68x::ProfileStep,
+    config: HeaterStepConfig,
+) -> WireProfileStep {
+    let measurement = step.measurement;
+    WireProfileStep {
+        step_index,
+        gas_index: measurement.gas_index,
+        measurement_index: measurement.measurement_index,
+        status: measurement.status.bits(),
+        raw_measurement_status: measurement.raw_field_status,
+        raw_gas_status: measurement.raw_gas_status,
+        target_temperature_celsius: config.target_temperature_celsius,
+        configured_duration_us: config.configured_duration_us,
+        offset_us: step.observed_offset_us,
+        temperature_centi_celsius: measurement.values.temperature,
+        pressure_pascal: measurement.values.pressure,
+        humidity_milli_percent_rh: measurement.values.humidity,
+        gas_resistance_ohm: measurement.values.gas_resistance,
+        temperature_adc: measurement.raw.temperature_adc,
+        pressure_adc: measurement.raw.pressure_adc,
+        humidity_adc: measurement.raw.humidity_adc,
+        gas_resistance_adc: measurement.raw.gas_resistance_adc,
+        gas_range: measurement.raw.gas_range,
+        repetition_multiplier: config.repetition_multiplier,
+        heater_resistance: measurement.heater_resistance,
+        heater_current: measurement.heater_current,
+        gas_wait: measurement.gas_wait,
+    }
+}
+
+/// Compare every sensor configuration field that contributes real identity,
+/// deliberately excluding only the unprogrammed volatile IDAC array.
+#[must_use]
+pub fn sensor_readback_identity_eq(
+    left: &bme68x::SensorConfigurationReadback,
+    right: &bme68x::SensorConfigurationReadback,
+) -> bool {
+    left.operation_mode == right.operation_mode
+        && left.environmental == right.environmental
+        && left.heater.control_gas_0 == right.heater.control_gas_0
+        && left.heater.control_gas_1 == right.heater.control_gas_1
+        && left.heater.registers.resistance == right.heater.registers.resistance
+        && left.heater.registers.gas_wait == right.heater.registers.gas_wait
+        && left.heater.registers.shared_duration == right.heater.registers.shared_duration
+}
 
 /// Silent BME resets must be detected before the next heater run, not merely
 /// when the less-frequent `DeviceConfig` packet is due.
 pub const VERIFY_CONFIGURATION_BEFORE_EVERY_SCAN: bool = true;
+
+/// Production LoRa cadence for repeating an already delivered configuration.
+#[allow(dead_code)] // The UART training build deliberately repeats every scan.
+pub const LORA_CONFIG_REPEAT_INTERVAL_SCANS: u16 = 6;
 
 /// A failed post-Parallel Sleep/recovery gets only this many additional local
 /// stop commands. The bound preserves prompt server-visible health instead of
@@ -113,6 +212,16 @@ impl DeviceConfigDeliveryState {
     pub const fn record_id_change(&mut self) {
         self.pending = true;
         self.current_id_transmitted = false;
+    }
+
+    /// Mark a genuinely changed canonical configuration and report the result.
+    pub const fn record_id_change_if_needed(&mut self, current_id: u64, next_id: u64) -> bool {
+        if current_id == next_id {
+            false
+        } else {
+            self.record_id_change();
+            true
+        }
     }
 
     /// Latch a due definition before any later encoder can fail. Returns
@@ -254,6 +363,11 @@ pub const fn discarded_field_count_overflowed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vesta_protocol_v2::v2::{
+        BUILD_FLAG_ID_VALID, CONFIG_FLAG_CALIBRATION_HASH_VALID,
+        CONFIG_FLAG_SENSOR_CONFIG_READ_BACK, HeaterStepConfig, MAX_V2_FRAME_LEN_U8,
+        OUTPUT_ROUTE_LORA_P2P, STEPS_PER_FRAGMENT_U8,
+    };
 
     const GOOD: ProfileQualityEvidence = ProfileQualityEvidence {
         sensor_failed: false,
@@ -268,6 +382,69 @@ mod tests {
         observation_overflowed: false,
         stale_pre_scan_field_count: 0,
     };
+
+    fn device_config_fixture() -> DeviceConfig {
+        let mut steps = [HeaterStepConfig::default(); MAX_PROFILE_STEPS];
+        for (index, step) in steps.iter_mut().enumerate() {
+            let index = u8::try_from(index).unwrap();
+            *step = HeaterStepConfig {
+                target_temperature_celsius: 100 + u16::from(index) * 20,
+                configured_duration_us: 138_898 * (u32::from(index) + 1),
+                repetition_multiplier: index + 1,
+                readback_heater_current: 95 + index,
+                programmed_heater_resistance: 110 + index,
+                programmed_gas_wait: 80 + index,
+            };
+        }
+        DeviceConfig {
+            flags: CONFIG_FLAG_CALIBRATION_HASH_VALID | CONFIG_FLAG_SENSOR_CONFIG_READ_BACK,
+            firmware_version: [0, 2, 0],
+            firmware_build_flags: BUILD_FLAG_ID_VALID,
+            firmware_build_id: 0xee37_2943_3e6a_79f7,
+            sensor_chip_id: 0x61,
+            sensor_variant: 1,
+            sensor_i2c_address: 0x76,
+            temperature_oversampling: 2,
+            humidity_oversampling: 1,
+            pressure_oversampling: 5,
+            iir_filter: 0,
+            standby_time: 0,
+            operation_mode: 2,
+            heater_enabled: 1,
+            parallel_requested_shared_wait_ms: 99,
+            parallel_shared_wait_register: 0x73,
+            parallel_quantized_shared_wait_us: 97_308,
+            tphg_duration_us: 41_590,
+            expected_profile_duration_us: 10_695_146,
+            profile_id: 0x0354,
+            profile_version: 1,
+            expected_step_count: 10,
+            heater_readback_valid_bitmap: 0x03ff,
+            calibration_hash_algorithm: 1,
+            calibration_hash: 0xb0b1_b2b3_b4b5_b6b7,
+            scan_interval_ms: 180_000,
+            config_repeat_interval_scans: LORA_CONFIG_REPEAT_INTERVAL_SCANS,
+            output_routes: OUTPUT_ROUTE_LORA_P2P,
+            radio_frequency_hz: 868_100_000,
+            radio_tx_power_dbm: 5,
+            radio_spreading_factor: 7,
+            radio_bandwidth_hz: 125_000,
+            radio_coding_rate_numerator: 4,
+            radio_coding_rate_denominator: 5,
+            radio_preamble_symbols: 8,
+            radio_header_mode: 0,
+            radio_phy_crc_enabled: 1,
+            radio_iq_inverted: 0,
+            radio_sync_word: 0x1424,
+            max_frame_len: MAX_V2_FRAME_LEN_U8,
+            profile_steps_per_fragment: STEPS_PER_FRAGMENT_U8,
+            steps,
+        }
+    }
+
+    fn idac_values(config: &DeviceConfig) -> [u8; MAX_PROFILE_STEPS] {
+        core::array::from_fn(|index| config.steps[index].readback_heater_current)
+    }
 
     #[test]
     fn timeout_with_all_slots_is_still_incomplete() {
@@ -414,6 +591,122 @@ mod tests {
         assert_eq!(state.prepare_encode(false, true), (true, false));
         state.record_completed();
         assert_eq!(state.prepare_encode(true, true), (true, true));
+    }
+
+    #[test]
+    fn idac_only_drift_keeps_config_id_and_delivery_idle() {
+        let mut initial = device_config_fixture();
+        let canonical = CanonicalIdacSnapshot::capture(idac_values(&initial));
+        let initial_id = canonical.config_id(&mut initial).unwrap();
+
+        let mut delivery = DeviceConfigDeliveryState::new();
+        assert_eq!(delivery.prepare_encode(true, true), (true, false));
+        delivery.record_completed();
+
+        let mut later = initial;
+        for (index, step) in later.steps.iter_mut().enumerate() {
+            step.readback_heater_current = step
+                .readback_heater_current
+                .wrapping_add(u8::try_from(index % 3 + 1).unwrap());
+        }
+        let latest_raw_current = later.steps[1].readback_heater_current;
+        let later_id = canonical.config_id(&mut later).unwrap();
+
+        assert_eq!(later_id, initial_id);
+        assert_eq!(idac_values(&later), idac_values(&initial));
+        assert!(!delivery.record_id_change_if_needed(initial_id, later_id));
+        assert_eq!(delivery.prepare_encode(false, true), (false, true));
+        let emitted = wire_profile_step(
+            1,
+            bme68x::ProfileStep {
+                measurement: bme68x::Measurement {
+                    heater_current: latest_raw_current,
+                    ..bme68x::Measurement::default()
+                },
+                observed_offset_us: 123_456,
+            },
+            later.steps[1],
+        );
+        assert_eq!(emitted.heater_current, latest_raw_current);
+        assert_ne!(
+            emitted.heater_current,
+            later.steps[1].readback_heater_current
+        );
+    }
+
+    #[test]
+    fn res_heat_or_gas_wait_change_forces_new_non_repeated_config() {
+        for mutate in [
+            |config: &mut DeviceConfig| {
+                config.steps[0].programmed_heater_resistance ^= 1;
+            },
+            |config: &mut DeviceConfig| {
+                config.steps[0].programmed_gas_wait ^= 1;
+            },
+        ] {
+            let mut initial = device_config_fixture();
+            let canonical = CanonicalIdacSnapshot::capture(idac_values(&initial));
+            let initial_id = canonical.config_id(&mut initial).unwrap();
+            let mut changed = initial;
+            mutate(&mut changed);
+            let changed_id = canonical.config_id(&mut changed).unwrap();
+
+            assert_ne!(changed_id, initial_id);
+            let mut delivery = DeviceConfigDeliveryState::new();
+            delivery.record_completed();
+            assert!(delivery.record_id_change_if_needed(initial_id, changed_id));
+            assert_eq!(delivery.prepare_encode(false, true), (true, false));
+        }
+    }
+
+    #[test]
+    fn unchanged_config_repeats_only_at_six_scan_boundary() {
+        let mut delivery = DeviceConfigDeliveryState::new();
+        assert_eq!(delivery.prepare_encode(true, true), (true, false));
+        delivery.record_completed();
+
+        for sequence in 1..LORA_CONFIG_REPEAT_INTERVAL_SCANS as u32 {
+            assert_eq!(
+                delivery.prepare_encode(
+                    configuration_check_due(sequence, LORA_CONFIG_REPEAT_INTERVAL_SCANS),
+                    true,
+                ),
+                (false, true)
+            );
+        }
+        assert_eq!(
+            delivery.prepare_encode(
+                configuration_check_due(
+                    u32::from(LORA_CONFIG_REPEAT_INTERVAL_SCANS),
+                    LORA_CONFIG_REPEAT_INTERVAL_SCANS,
+                ),
+                true,
+            ),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn sensor_readback_identity_ignores_only_idac() {
+        let mut initial = bme68x::SensorConfigurationReadback {
+            operation_mode: bme68x::OperationMode::Sleep,
+            environmental: bme68x::Configuration::default(),
+            heater: bme68x::HeaterConfigurationReadback::default(),
+        };
+        initial.heater.registers.current = [95; MAX_PROFILE_STEPS];
+        initial.heater.registers.resistance = [110; MAX_PROFILE_STEPS];
+        initial.heater.registers.gas_wait = [80; MAX_PROFILE_STEPS];
+        initial.heater.registers.shared_duration = 0x73;
+
+        let mut changed = initial;
+        changed.heater.registers.current = [172; MAX_PROFILE_STEPS];
+        assert!(sensor_readback_identity_eq(&initial, &changed));
+
+        changed.heater.registers.resistance[0] ^= 1;
+        assert!(!sensor_readback_identity_eq(&initial, &changed));
+        changed = initial;
+        changed.heater.registers.gas_wait[0] ^= 1;
+        assert!(!sensor_readback_identity_eq(&initial, &changed));
     }
 
     #[test]

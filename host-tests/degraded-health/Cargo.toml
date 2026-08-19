@@ -7,6 +7,11 @@ publish = false
 [dependencies]
 embedded-hal = "1.0.0"
 
+[dependencies.bme68x]
+git = "https://github.com/carlosgj94/bosch-bme68x-rust.git"
+rev = "64ee71d375958927aee2ae3d3405a090bb16ea08"
+default-features = false
+
 [dependencies.vesta-protocol-v2]
 package = "vesta-protocol"
 git = "https://github.com/carlosgj94/vesta-receiver.git"

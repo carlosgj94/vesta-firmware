@@ -12,7 +12,8 @@ pub const SCAN_INTERVAL: Duration = Duration::from_secs(SCAN_INTERVAL_SECONDS as
 #[cfg(feature = "profile-v2-uart")]
 pub const CONFIG_REPEAT_INTERVAL_SCANS: u16 = 1;
 #[cfg(not(feature = "profile-v2-uart"))]
-pub const CONFIG_REPEAT_INTERVAL_SCANS: u16 = 6;
+pub const CONFIG_REPEAT_INTERVAL_SCANS: u16 =
+    crate::profile_status::LORA_CONFIG_REPEAT_INTERVAL_SCANS;
 
 pub const HEALTH_INTERVAL_SCANS: u32 = 6;
 
